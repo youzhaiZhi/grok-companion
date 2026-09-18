@@ -1,0 +1,59 @@
+name: Android arm64 Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Release APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.3
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Verify geometry asset
+        run: test -s assets/geo/grok_geo.json
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Tests
+        run: flutter test
+
+      - name: Build APK (arm64-v8a only)
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: Verify ABI
+        run: |
+          APK=$(find build/app/outputs/flutter-apk -name '*.apk' | head -n1)
+          echo "APK=$APK"
+          unzip -l "$APK" | grep 'lib/' | sort -u
+          if unzip -l "$APK" | grep -E 'lib/(armeabi-v7a|x86|x86_64)/'; then
+            echo "Unexpected non-arm64 ABI found" && exit 1
+          fi
+          unzip -l "$APK" | grep 'lib/arm64-v8a/'
+          cp "$APK" grok-companion-arm64.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-companion-arm64
+          path: grok-companion-arm64.apk
+          retention-days: 30
