@@ -1,10 +1,74 @@
+import 'dart:math' as math;
+
 import 'body.dart';
 import 'eyes_core.dart';
 import 'eyes_paint.dart';
 import 'geometry.dart';
 import 'mathx.dart';
+import 'overlays.dart';
 import 'pose.dart';
 import 'tables.dart';
+import 'tricks.dart';
+
+const double _deg2rad = math.pi / 180;
+
+/// 已注册的自定义表情：基于预设锚点 + 受控参数偏移（无坐标字段）。
+class RegisteredExpression {
+  RegisteredExpression({
+    required this.id,
+    required this.cnName,
+    this.desc = '',
+    required this.base,
+    this.intensity = 0.5,
+    this.holdMs = 2200,
+    this.lid,
+    this.eyeBoost,
+    this.shape,
+    this.color,
+    this.effects = true,
+  });
+
+  final String id;
+  final String cnName;
+  final String desc;
+  final String base;
+  final double intensity;
+  final double holdMs;
+  final double? lid;
+  final double? eyeBoost;
+  final String? shape;
+  final String? color;
+  final bool effects;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'cnName': cnName,
+        'desc': desc,
+        'base': base,
+        'intensity': intensity,
+        'holdMs': holdMs,
+        'lid': lid,
+        'eyeBoost': eyeBoost,
+        'shape': shape,
+        'color': color,
+        'effects': effects,
+      };
+
+  factory RegisteredExpression.fromJson(Map<String, dynamic> j) =>
+      RegisteredExpression(
+        id: j['id'] as String,
+        cnName: j['cnName'] as String,
+        desc: (j['desc'] as String?) ?? '',
+        base: j['base'] as String,
+        intensity: (j['intensity'] as num?)?.toDouble() ?? 0.5,
+        holdMs: (j['holdMs'] as num?)?.toDouble() ?? 2200,
+        lid: (j['lid'] as num?)?.toDouble(),
+        eyeBoost: (j['eyeBoost'] as num?)?.toDouble(),
+        shape: j['shape'] as String?,
+        color: j['color'] as String?,
+        effects: (j['effects'] as bool?) ?? true,
+      );
+}
 
 /// 角色每帧渲染快照（供 CustomPainter 直接消费）。
 class CharacterView {
@@ -17,6 +81,10 @@ class CharacterView {
     required this.sy,
     required this.eyePolys,
     required this.eyes,
+    required this.overlay,
+    required this.colorId,
+    required this.prevColorId,
+    required this.colorBlend,
   });
 
   final String bodyPath;
@@ -29,6 +97,10 @@ class CharacterView {
   /// 当前每只眼睛的多边形（已完成眼型 morph）。
   final List<List<Pt>> eyePolys;
   final List<EyeTransform> eyes;
+  final OverlayView overlay;
+  final String colorId;
+  final String prevColorId;
+  final double colorBlend;
 }
 
 class GrokCharacter {
@@ -60,6 +132,17 @@ class GrokCharacter {
     blinkQueue = [];
     winkAt = -1e9;
     winkEye = 0;
+
+    colorId = 'black';
+    prevColorId = 'black';
+    colorBlend = Spring(1);
+    overlayState = OverlayState();
+    registered = {};
+    currentOverride = null;
+    reduceMotion = false;
+    autoTricks = true;
+    showDots = true;
+    trickAt = 0;
   }
 
   final GrokGeometry geo;
@@ -93,31 +176,116 @@ class GrokCharacter {
   double winkAt = -1e9;
   int winkEye = 0;
 
+  late String colorId;
+  late String prevColorId;
+  late Spring colorBlend;
+  late OverlayState overlayState;
+  late Map<String, RegisteredExpression> registered;
+  RegisteredExpression? currentOverride;
+  late bool reduceMotion;
+  late bool autoTricks;
+  late bool showDots;
+  late double trickAt;
+
   double _now = 0;
   double _last = 0;
+
+  bool get isPreset => Tables.presetStates.contains(state);
+  String get effectiveState => currentOverride?.base ?? state;
 
   void start(double now) {
     t0 = now;
     stateAt = now;
     ctx = PoseCtx(now);
+    trickAt = now + rand(2500, 5000);
   }
 
-  void setStateName(String name) {
-    state = name;
+  /// 统一控制通道：id 必须来自预设或已注册自定义；其余参数越界安全忽略。
+  bool setExpression(
+    String id, {
+    double? intensity,
+    double? holdMs,
+    String? shape,
+    String? color,
+  }) {
+    final isPreset = Tables.presetStates.contains(id);
+    final custom = registered[id];
+    if (!isPreset && custom == null) return false;
+
+    if (isPreset) {
+      state = id;
+      currentOverride = null;
+    } else {
+      state = custom!.id;
+      currentOverride = custom;
+    }
     stateAt = _now;
     ctx = PoseCtx(stateAt);
     eyeIdx = 0;
-    _morphEyes(Tables.eyePlaylist[name]!.first, 7);
-    if (name == 'waking') {
+    overlayState.reset();
+
+    final base = effectiveState;
+    _morphEyes(Tables.eyePlaylist[base]!.first, 7);
+    if (base == 'waking') {
       blinkQueue.add(BlinkItem(_now + 560, 0.05));
       blinkQueue.add(BlinkItem(_now + 1020, 0.05));
     }
+
+    final reg = currentOverride;
+    if (reg != null) {
+      if (reg.shape != null) _applyShape(reg.shape!);
+      if (reg.color != null) _applyColor(reg.color!);
+    }
+    expressionIntensity = clamp(intensity ?? reg?.intensity ?? 0.5, 0, 1);
+    if (shape != null) _applyShape(shape);
+    if (color != null) _applyColor(color);
+    return true;
   }
 
-  void setShape(String name) {
-    if (name == shapeName) return;
+  void setStateName(String name) => setExpression(name);
+
+  void _applyShape(String name) {
+    if (!Tables.curatedShapes.contains(name) || name == shapeName) return;
     shapeName = name;
     shapeSpring = Spring(0);
+  }
+
+  void setShape(String name) => _applyShape(name);
+
+  void _applyColor(String id) {
+    if (!Tables.paletteIds.contains(id) || id == colorId) return;
+    prevColorId = colorId;
+    colorId = id;
+    colorBlend = Spring(0);
+  }
+
+  void setColor(String id) => _applyColor(id);
+
+  /// 注册自定义表情（仅供本地库/AI 创作模式调用，聊天通道无法触达）。
+  bool registerCustom(RegisteredExpression exp) {
+    if (Tables.presetStates.contains(exp.id)) return false;
+    if (!Tables.presetStates.contains(exp.base)) return false;
+    if (exp.id.isEmpty || exp.id.length > 32) return false;
+    registered[exp.id] = exp;
+    return true;
+  }
+
+  bool unregisterCustom(String id) {
+    if (!registered.containsKey(id)) return false;
+    registered.remove(id);
+    if (currentOverride?.id == id) setExpression('idle');
+    return true;
+  }
+
+  /// intensity 0–1 → (动作幅度, 眼睛放大)；锚点 0/0.5/1。
+  (double, double) intensityMap(double i) {
+    final v = clamp(i, 0, 1);
+    if (v <= 0.5) {
+      final t = v / 0.5;
+      return (0.55 + 0.45 * t, 0.95 + 0.05 * t);
+    }
+    final t = (v - 0.5) / 0.5;
+    return (1 + 0.5 * t, 1 + 0.18 * t);
   }
 
   void _morphEyes(int index, double stiffness) {
@@ -141,54 +309,123 @@ class GrokCharacter {
 
     final mt = (now - t0) / 1000;
     final dtState = (now - stateAt) / 1000;
+    final base = effectiveState;
 
-    final pose = applyPose(state, mt, dtState, now, ctx, blinkX: blink.x);
+    final pose = applyPose(base, mt, dtState, now, ctx, blinkX: blink.x);
 
-    spin.t = pose.spin;
-    txSpring.t = pose.tx;
-    tySpring.t = pose.ty;
+    // intensity 映射为动作幅度与眼睛放大；自定义还可叠加 eyeBoost/hold/lid。
+    final override = currentOverride;
+    final (motionMul, eyeBoostMul) = intensityMap(expressionIntensity);
+    final holdScale = override == null ? 1.0 : override.holdMs / 2200;
+
+    spin.t = pose.spin * _deg2rad * motionMul;
+    txSpring.t = pose.tx * motionMul;
+    tySpring.t = pose.ty * motionMul;
     squash.t = pose.squash;
-    eyeScale.t = pose.eyeBoost;
+    eyeScale.t =
+        pose.eyeBoost * eyeBoostMul * (override?.eyeBoost ?? 1);
 
     if (ctx.tyKick != 0) {
-      tySpring.v += ctx.tyKick;
+      tySpring.v += ctx.tyKick * motionMul;
       ctx.tyKick = 0;
     }
     if (ctx.spinKick != 0) {
-      spin.v += ctx.spinKick;
+      spin.v += ctx.spinKick * _deg2rad * motionMul;
       ctx.spinKick = 0;
     }
 
     // 眼型播放列表推进。
-    if (state != 'waking' && state != 'sleeping') {
-      final list = Tables.eyePlaylist[state]!;
-      final hold = Tables.eyeHoldMs[state]!;
-      final until = stateAt + _eyeStartOffset + hold[eyeIdx % hold.length];
+    if (base != 'waking' && base != 'sleeping') {
+      final list = Tables.eyePlaylist[base]!;
+      final hold = Tables.eyeHoldMs[base]!;
+      final until =
+          stateAt + _eyeStartOffset + hold[eyeIdx % hold.length] * holdScale;
       if (now >= until && list.length > 1) {
         eyeIdx = (eyeIdx + 1) % list.length;
-        _morphEyes(list[eyeIdx], state == 'searching' || state == 'excited' ? 10 : 6);
+        _morphEyes(
+            list[eyeIdx], base == 'searching' || base == 'excited' ? 10 : 6);
         _eyeStartOffset = 0;
       }
     }
 
     // 周期性眨眼。
-    final cadence = Tables.blinkMs[state];
+    final cadence = Tables.blinkMs[base];
     final blinkUntilMs = stateAt + _blinkOffset + (cadence?[0] ?? 0);
     if (cadence != null && now >= blinkUntilMs) {
       queueBlink(blinkQueue, now);
       _blinkOffset = cadence[1];
     }
     final key = consumeBlink(blinkQueue, now);
-    blink.t = key ?? pose.lid;
+    var lidTarget = key ?? pose.lid;
+    if (override != null && override.lid != null) {
+      lidTarget = clamp(lidTarget * override.lid!, 0, 1.2);
+    }
+    blink.t = lidTarget;
 
     // 凝视。
     final gazeUntilMs = stateAt + _gazeOffset;
     if (now >= gazeUntilMs) {
-      final gz = nextGaze(state);
+      final gz = nextGaze(base);
       gazeX.t = gz.x;
       gazeY.t = gz.y;
       _gazeOffset = gz.hold[0];
     }
+
+    // 小动作随机调度（V_T/B_T 状态；待机导演可经 autoTricks 关闭）。
+    if (now >= trickAt) {
+      if (autoTricks &&
+          !reduceMotion &&
+          (Tables.vStates.contains(base) || Tables.bStates.contains(base)) &&
+          spinTurn == null &&
+          hopAt < 0 &&
+          trick == null) {
+        final isV = Tables.vStates.contains(base);
+        final z = rand(0, 1);
+        if (isV) {
+          if (z < 0.55) {
+            spinOnce();
+          } else {
+            playTrick('spinBounce');
+          }
+        } else if (z < 0.34) {
+          playTrick('spinBounce');
+        } else if (z < 0.62) {
+          hop();
+        } else if (z < 0.86) {
+          playTrick('spinDizzy');
+        } else {
+          spinOnce();
+        }
+      }
+      trickAt = now + rand(9000, 18000);
+    }
+
+    // 动作：组合特技求值。
+    TrickFrame tf;
+    if (trick != null) {
+      tf = evalTrick(trick, now);
+      if (tf.wantHop) hopAt = now;
+      if (tf.done) trick = null;
+    } else {
+      tf = TrickFrame();
+    }
+
+    // 跳跃偏移。
+    final hopVal = hopY(hopAt, now);
+    if (hopVal == null) hopAt = -1;
+    final hopOffsetVal = hopVal ?? 0;
+
+    // 叠加特效：thinking dots / writing pencil。
+    String? overlayKind;
+    if (base == 'thinking' && showDots) overlayKind = 'dots';
+    if (base == 'writing') overlayKind = 'pencil';
+    final overlay = overlayState.eval(
+      overlayKind,
+      now,
+      stateAt,
+      geo.re,
+      reduce: reduceMotion,
+    );
 
     // 弹簧积分。
     final dt = (_last == 0 ? 1 / 120 : (now - _last) / 1000);
@@ -197,6 +434,7 @@ class GrokCharacter {
     final h = stepDt / n;
     for (int i = 0; i < n; i++) {
       stepSpring(eyeMorph, eyeStiffness, 1, h);
+      if (spinTurn != null) stepSpring(spinTurn!, 5, 0.9, h);
       stepSpring(spin, 5, 0.9, h);
       stepSpring(txSpring, 3.5, 1, h);
       stepSpring(tySpring, 4, 1, h);
@@ -206,8 +444,16 @@ class GrokCharacter {
       stepSpring(gazeX, 13, 1, h);
       stepSpring(gazeY, 13, 1, h);
       stepSpring(shapeSpring, 10, 1, h);
+      stepSpring(colorBlend, 9, 1, h);
+    }
+    if (spinTurn != null && spinTurnSettled(spinTurn!)) spinTurn = null;
+    if ((colorBlend.t - colorBlend.x).abs() < 0.002 && colorBlend.x > 0.996) {
+      prevColorId = colorId;
     }
     _last = now;
+
+    // spinTurn 当前角位移叠加到最终旋转。
+    final spinTurnAngle = spinTurn?.x ?? 0;
 
     final eyePolys = [_currentPoly(0), _currentPoly(1)];
 
@@ -236,17 +482,45 @@ class GrokCharacter {
 
     return CharacterView(
       bodyPath: shape.path,
-      tx: txSpring.x,
-      ty: tySpring.x,
-      rot: spin.x,
+      tx: txSpring.x + tf.yi,
+      ty: tySpring.x + hopOffsetVal + tf.ki,
+      rot: spin.x + spinTurnAngle + (tf.turn ?? 0) + tf.kr * _deg2rad,
       sx: squash.x,
       sy: squash.x,
       eyePolys: eyePolys,
       eyes: eyes,
+      overlay: overlay,
+      colorId: colorId,
+      prevColorId: prevColorId,
+      colorBlend: colorBlend.x,
     );
   }
 
   double _eyeStartOffset = 0;
   double _blinkOffset = 3000;
   double _gazeOffset = 1000;
+
+  /// 当前表情强度（预设默认 0.5 → 动作 1.0/眼睛 1.0；AI 标签可临时覆盖）。
+  double expressionIntensity = 0.5;
+
+  Trick? trick;
+  double hopAt = -1;
+  Spring? spinTurn;
+
+  /// 触发跳跃。
+  void hop() {
+    if (!reduceMotion) hopAt = _now;
+  }
+
+  /// 触发转一圈。
+  void spinOnce({int turns = 1}) {
+    if (reduceMotion || spinTurn != null) return;
+    spinTurn = makeSpinTurn(turns, randomSign());
+  }
+
+  /// 触发组合特技。
+  void playTrick(String kind) {
+    final t = startTrick(kind, _now, reduceMotion);
+    if (t != null) trick = t;
+  }
 }

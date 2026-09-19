@@ -3,7 +3,11 @@ name: Android arm64 Build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -57,3 +61,21 @@ jobs:
           name: grok-companion-arm64
           path: grok-companion-arm64.apk
           retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: grok-companion-arm64
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: grok-companion-arm64.apk
+          generate_release_notes: true

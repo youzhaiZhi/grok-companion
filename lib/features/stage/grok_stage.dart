@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 
 import '../../engine/character.dart';
 import '../../engine/geometry.dart';
+import '../../engine/overlays.dart';
 import '../../engine/svg_path.dart';
 
 /// 舞台控制器：持有角色，由单 Ticker 驱动；每帧仅通知 painter 重绘，不重建组件树。
@@ -21,6 +21,10 @@ class StageController extends ChangeNotifier {
     sy: 1,
     eyePolys: const [],
     eyes: const [],
+    overlay: const OverlayView(),
+    colorId: 'black',
+    prevColorId: 'black',
+    colorBlend: 1,
   );
 
   void tick(double now) {
@@ -28,86 +32,78 @@ class StageController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setExpression(String id) => character.setStateName(id);
+  bool setExpression(
+    String id, {
+    double? intensity,
+    double? holdMs,
+    String? shape,
+    String? color,
+  }) =>
+      character.setExpression(
+        id,
+        intensity: intensity,
+        holdMs: holdMs,
+        shape: shape,
+        color: color,
+      );
+
+  void hop() => character.hop();
+  void spinOnce() => character.spinOnce();
+  void playTrick(String kind) => character.playTrick(kind);
 }
 
 class GrokStage extends StatefulWidget {
-  const GrokStage({super.key, this.expression, this.geometry});
+  const GrokStage({super.key, required this.controller, this.onFrame});
 
-  final String? expression;
-
-  /// 预加载几何；不提供时从 asset 加载（真机路径）。
-  final GrokGeometry? geometry;
+  final StageController controller;
+  final void Function(double frameMs)? onFrame;
 
   @override
   State<GrokStage> createState() => _GrokStageState();
 }
 
 class _GrokStageState extends State<GrokStage>
-    with SingleTickerProviderStateMixin {
-  GrokGeometry? _geo;
-  StageController? _controller;
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   late final Ticker _ticker;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _ticker = createTicker((elapsed) {
-      _controller?.tick(elapsed.inMilliseconds.toDouble());
-    });
-    final injected = widget.geometry;
-    if (injected != null) {
-      _ready(injected);
-    } else {
-      _load();
-    }
-  }
-
-  void _ready(GrokGeometry geo) {
-    _geo = geo;
-    _controller = StageController(geo);
-    _ticker.start();
-  }
-
-  Future<void> _load() async {
-    final raw = await rootBundle.loadString('assets/geo/grok_geo.json');
-    final geo = GrokGeometry.fromJsonString(raw);
-    if (!mounted) return;
-    setState(() => _ready(geo));
+      final ms = elapsed.inMilliseconds.toDouble();
+      widget.controller.tick(ms);
+      widget.onFrame?.call(ms);
+    })..start();
   }
 
   @override
-  void didUpdateWidget(covariant GrokStage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.expression != null && widget.expression != oldWidget.expression) {
-      _controller?.setExpression(widget.expression!);
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _ticker.stop();
+    } else if (state == AppLifecycleState.resumed && !_ticker.isTicking) {
+      _ticker.start();
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
-    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final geo = _geo;
-    final controller = _controller;
-    if (geo == null || controller == null) {
-      return const SizedBox(
-        height: 260,
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
     return RepaintBoundary(
       child: CustomPaint(
-        size: Size.square(geo.viewBox.width),
+        size: Size.square(widget.controller.geo.viewBox.width),
         painter: _GrokPainter(
-          controller: controller,
+          controller: widget.controller,
           ink: _inkColor(context),
           eyeColor: Theme.of(context).scaffoldBackgroundColor,
+          brightness: Theme.of(context).brightness,
         ),
       ),
     );
@@ -124,11 +120,21 @@ class _GrokPainter extends CustomPainter {
     required this.controller,
     required this.ink,
     required this.eyeColor,
+    required this.brightness,
   }) : super(repaint: controller);
 
   final StageController controller;
   final Color ink;
   final Color eyeColor;
+  final Brightness brightness;
+
+  Color _palette(String id) {
+    final hex = brightness == Brightness.dark
+        ? controller.geo.palette[id]!.dark
+        : controller.geo.palette[id]!.light;
+    final v = int.parse(hex.substring(1), radix: 16);
+    return Color(0xFF000000 | v);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -136,8 +142,14 @@ class _GrokPainter extends CustomPainter {
     if (view.bodyPath.isEmpty) return;
     const r = 259.0 / 2;
 
+    final paletteInk = Color.lerp(
+      _palette(view.prevColorId),
+      _palette(view.colorId),
+      view.colorBlend,
+    )!;
+
     final bodyPaint = Paint()
-      ..color = ink
+      ..color = paletteInk
       ..style = PaintingStyle.fill
       ..isAntiAlias = true;
 
@@ -145,6 +157,9 @@ class _GrokPainter extends CustomPainter {
       ..color = eyeColor
       ..style = PaintingStyle.fill
       ..isAntiAlias = true;
+
+    // 叠加特效绘制于身体之下（被身体覆盖的部分不可见，与 Web 版一致）。
+    _paintOverlay(canvas, view, paletteInk);
 
     final path = _pathCache.putIfAbsent(
       view.bodyPath,
@@ -155,7 +170,7 @@ class _GrokPainter extends CustomPainter {
     canvas.save();
     canvas.translate(view.tx, view.ty);
     canvas.translate(r, r);
-    canvas.rotate(view.rot * 3.14159265 / 180);
+    canvas.rotate(view.rot);
     canvas.scale(view.sx, view.sy);
     canvas.translate(-r, -r);
     canvas.drawPath(path, bodyPaint);
@@ -187,6 +202,71 @@ class _GrokPainter extends CustomPainter {
       canvas.restore();
     }
     canvas.restore();
+  }
+
+  void _paintOverlay(Canvas canvas, CharacterView view, Color ink) {
+    final ov = view.overlay;
+    if (!ov.active) return;
+
+    if (ov.kind == 'dots') {
+      for (final d in ov.dots) {
+        canvas.drawCircle(
+          Offset(d.x, d.y),
+          d.r,
+          Paint()
+            ..color = ink.withValues(alpha: d.opacity.clamp(0, 1).toDouble())
+            ..isAntiAlias = true,
+        );
+      }
+      return;
+    }
+
+    if (ov.kind == 'pencil') {
+      if (ov.ink.length >= 2) {
+        final trail = Path()..moveTo(ov.ink.first[0], ov.ink.first[1]);
+        for (final p in ov.ink.skip(1)) {
+          trail.lineTo(p[0], p[1]);
+        }
+        canvas.drawPath(
+          trail,
+          Paint()
+            ..color = ink.withValues(alpha: ov.inkOpacity)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 6
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round,
+        );
+      }
+
+      final alpha = ov.pencilOpacity.clamp(0, 1).toDouble();
+      if (alpha <= 0.01) return;
+      final paint = Paint()
+        ..color = ink.withValues(alpha: alpha)
+        ..isAntiAlias = true;
+      canvas.save();
+      canvas.translate(ov.pencilX, ov.pencilY);
+      canvas.rotate(ov.pencilRot);
+      const halfLen = 29.0;
+      const halfW = 7.5;
+      final body = Path()
+        ..moveTo(-halfLen, -halfW)
+        ..lineTo(halfLen - halfW, -halfW)
+        ..lineTo(halfLen + 5, 0)
+        ..lineTo(halfLen - halfW, halfW)
+        ..lineTo(-halfLen, halfW)
+        ..close();
+      canvas.drawPath(body, paint);
+      canvas.drawCircle(
+        const Offset(-halfLen, 0),
+        halfW,
+        paint,
+      );
+      canvas.drawRect(
+        const Rect.fromLTWH(-halfLen - 2, -2, 5, 4),
+        paint,
+      );
+      canvas.restore();
+    }
   }
 
   @override

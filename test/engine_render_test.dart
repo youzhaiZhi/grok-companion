@@ -61,7 +61,7 @@ class _TestPainter extends CustomPainter {
     // 直接复用线上 painter 的变换逻辑做最小绘制。
     canvas.save();
     canvas.translate(size.width / 2 + v.tx, size.width / 2 + v.ty);
-    canvas.rotate(v.rot * 3.14159265 / 180);
+    canvas.rotate(v.rot);
     canvas.scale(v.sx, v.sy);
     canvas.drawCircle(Offset.zero, 40, paint);
     canvas.restore();
