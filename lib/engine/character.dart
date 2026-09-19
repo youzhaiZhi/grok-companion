@@ -231,6 +231,7 @@ class GrokCharacter {
     stateAt = now;
     ctx = PoseCtx(now);
     trickAt = now + rand(2500, 5000);
+    _resetTimers(now, effectiveState);
   }
 
   /// 以指定表情作为初始状态（用于预览页：第一帧就是目标表情，不经过 idle）。
@@ -256,6 +257,7 @@ class GrokCharacter {
     stateAt = now;
     ctx = PoseCtx(now);
     trickAt = now + rand(9000, 18000);
+    _resetTimers(now, base);
     _started = true;
   }
 
@@ -295,6 +297,7 @@ class GrokCharacter {
 
     final base = effectiveState;
     _morphEyes(Tables.eyePlaylist[base]!.first, 7);
+    _resetTimers(_now, base);
 
     // 启动过渡（减动态时缩短）；眼睛 morph 与过渡同进度。
     final dur = reduceMotion ? 200.0 : 380.0;
@@ -451,26 +454,24 @@ class GrokCharacter {
     // 眼型播放列表推进。
     if (base != 'waking' && base != 'sleeping') {
       final list = Tables.eyePlaylist[base]!;
-      final hold = Tables.eyeHoldMs[base]!;
-      final until =
-          stateAt + _eyeStartOffset + hold[eyeIdx % hold.length] * holdScale;
-      if (now >= until && list.length > 1) {
+      if (list.length > 1 && now >= _eyeUntil) {
         eyeIdx = (eyeIdx + 1) % list.length;
         _morphEyes(
             list[eyeIdx], base == 'searching' || base == 'excited' ? 10 : 6);
-        _eyeStartOffset = 0;
+        final hold = Tables.eyeHoldMs[base]!;
+        _eyeUntil = now + rand(hold[0], hold[1]) * holdScale;
       }
     }
 
     // 周期性眨眼。
     final cadence = Tables.blinkMs[base];
-    final blinkUntilMs = stateAt + _blinkOffset + (cadence?[0] ?? 0);
-    if (cadence != null && now >= blinkUntilMs) {
+    if (cadence != null && now >= _blinkUntil) {
       queueBlink(blinkQueue, now);
-      _blinkOffset = cadence[1];
+      _blinkUntil = now + rand(cadence[0], cadence[1]);
     }
     final key = consumeBlink(blinkQueue, now);
-    var lidTarget = key ?? pose.lid;
+    // 眨眼队列里还有未到点的帧时保持当前眼睑值，避免每帧回弹到 pose.lid 造成抖动。
+    var lidTarget = key ?? (blinkQueue.isEmpty ? pose.lid : blink.x);
     if (override != null && override.lid != null) {
       lidTarget = clamp(lidTarget * override.lid!, 0, 1.2);
     }
@@ -481,12 +482,11 @@ class GrokCharacter {
     blink.t = lidTarget;
 
     // 凝视。
-    final gazeUntilMs = stateAt + _gazeOffset;
-    if (now >= gazeUntilMs) {
+    if (now >= _gazeUntil) {
       final gz = nextGaze(base);
       gazeX.t = gz.x;
       gazeY.t = gz.y;
-      _gazeOffset = gz.hold[0];
+      _gazeUntil = now + rand(gz.hold[0], gz.hold[1]);
     }
 
     // 小动作随机调度（V_T/B_T 状态；待机导演可经 autoTricks 关闭）。
@@ -615,9 +615,22 @@ class GrokCharacter {
     );
   }
 
-  double _eyeStartOffset = 0;
-  double _blinkOffset = 3000;
-  double _gazeOffset = 1000;
+  // 三个计时器都必须以「当前时刻」为锚点滚动推进（对齐原版 eyeUntil/blinkUntil/gazeUntil）。
+  // 若写成「stateAt + 固定偏移」，一旦 now 越过该固定值，条件会逐帧恒真，
+  // 于是每帧都重排眼型 / 塞入眨眼 / 重设凝视 → 表现为约两秒后开始的抽搐。
+  double _eyeUntil = 0;
+  double _blinkUntil = double.infinity;
+  double _gazeUntil = 0;
+
+  /// 切换表情（或初始化）后重排计时器。
+  void _resetTimers(double now, String base) {
+    final hold = Tables.eyeHoldMs[base]!;
+    _eyeUntil = now + rand(hold[0], hold[1]);
+    final blink = Tables.blinkMs[base];
+    _blinkUntil =
+        blink == null ? double.infinity : now + rand(blink[0], blink[1]);
+    _gazeUntil = now + rand(500, 1400);
+  }
 
   /// 当前表情强度（预设默认 0.5 → 动作 1.0/眼睛 1.0；AI 标签可临时覆盖）。
   double expressionIntensity = 0.5;
