@@ -50,3 +50,6 @@ app.*.map.json
 # local artifacts
 logs/
 artifact/
+
+a.zip
+a/
