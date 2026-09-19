@@ -255,13 +255,18 @@ List<double> rot3(double turn, double tilt, double roll) {
   final ea = math.cos(tilt * d), ca = math.sin(tilt * d);
   final wo = math.cos(roll * d), c = math.sin(roll * d);
   return [
-    wo * ui - c * ea * si, -c * ea, wo * si + c * ea * ui,
+    wo * ui - c * ca * si, -c * ea, wo * si + c * ca * ui,
     c * ui + wo * ca * si, wo * ea, c * si - wo * ca * ui,
     -ea * si, ca, ea * ui,
   ];
 }
 
-List<double> relRot(List<double> gn, List<double> gn2) {
+List<double> relRot(
+  double pTurn, double pTilt, double pRoll,
+  double hTurn, double hTilt, double hRoll,
+) {
+  final gn = rot3(pTurn, pTilt, pRoll);
+  final gn2 = rot3(hTurn, hTilt, hRoll);
   List<double> row(int o) => [
         gn[o] * gn2[0] + gn[o + 1] * gn2[1] + gn[o + 2] * gn2[2],
         gn[o] * gn2[3] + gn[o + 1] * gn2[4] + gn[o + 2] * gn2[5],

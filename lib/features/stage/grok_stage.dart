@@ -19,6 +19,8 @@ class StageController extends ChangeNotifier {
     rot: 0,
     sx: 1,
     sy: 1,
+    eyePolys: const [],
+    eyes: const [],
   );
 
   void tick(double now) {
@@ -105,6 +107,7 @@ class _GrokStageState extends State<GrokStage>
         painter: _GrokPainter(
           controller: controller,
           ink: _inkColor(context),
+          eyeColor: Theme.of(context).scaffoldBackgroundColor,
         ),
       ),
     );
@@ -117,11 +120,15 @@ class _GrokStageState extends State<GrokStage>
 }
 
 class _GrokPainter extends CustomPainter {
-  _GrokPainter({required this.controller, required this.ink})
-      : super(repaint: controller);
+  _GrokPainter({
+    required this.controller,
+    required this.ink,
+    required this.eyeColor,
+  }) : super(repaint: controller);
 
   final StageController controller;
   final Color ink;
+  final Color eyeColor;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -129,8 +136,13 @@ class _GrokPainter extends CustomPainter {
     if (view.bodyPath.isEmpty) return;
     const r = 259.0 / 2;
 
-    final paint = Paint()
+    final bodyPaint = Paint()
       ..color = ink
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+
+    final eyePaint = Paint()
+      ..color = eyeColor
       ..style = PaintingStyle.fill
       ..isAntiAlias = true;
 
@@ -139,14 +151,41 @@ class _GrokPainter extends CustomPainter {
       () => parseSvgPath(view.bodyPath),
     );
 
-    // 原生路径已居中：以 Re 为轴施加平移/旋转/挤压，不做尺寸缩放。
+    // 身体：以中心为轴施加平移/旋转/挤压。
     canvas.save();
     canvas.translate(view.tx, view.ty);
     canvas.translate(r, r);
     canvas.rotate(view.rot * 3.14159265 / 180);
     canvas.scale(view.sx, view.sy);
     canvas.translate(-r, -r);
-    canvas.drawPath(path, paint);
+    canvas.drawPath(path, bodyPaint);
+
+    // 眼睛：与页面同色的眼型（视觉上像透出背景），经 3D 姿态仿射变换。
+    for (int e = 0; e < view.eyes.length; e++) {
+      final t = view.eyes[e];
+      if (!t.visible) continue;
+      final poly = view.eyePolys[e];
+      final eyePath = Path();
+      eyePath.moveTo(poly[0][0], poly[0][1]);
+      for (int p = 1; p < poly.length; p++) {
+        eyePath.lineTo(poly[p][0], poly[p][1]);
+      }
+      eyePath.close();
+
+      final matrix = Matrix4(
+        t.a, t.b, 0, 0,
+        t.c, t.d, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+      );
+
+      canvas.save();
+      canvas.translate(t.x, t.y);
+      canvas.transform(matrix.storage);
+      canvas.translate(-t.cx, -t.cy);
+      canvas.drawPath(eyePath, eyePaint);
+      canvas.restore();
+    }
     canvas.restore();
   }
 
