@@ -181,6 +181,7 @@ class GrokCharacter {
 
   late double t0;
   double stateAt = 0;
+  bool _started = false;
 
   late Spring spin;
   late Spring txSpring;
@@ -230,6 +231,32 @@ class GrokCharacter {
     stateAt = now;
     ctx = PoseCtx(now);
     trickAt = now + rand(2500, 5000);
+  }
+
+  /// 以指定表情作为初始状态（用于预览页：第一帧就是目标表情，不经过 idle）。
+  void initializeAs(String id, double now) {
+    final isPreset = Tables.presetStates.contains(id);
+    final custom = registered[id];
+    if (!isPreset && custom == null) return;
+
+    if (isPreset) {
+      state = id;
+      currentOverride = null;
+    } else {
+      state = custom!.id;
+      currentOverride = custom;
+    }
+    final base = effectiveState;
+    eyeIdx = 0;
+    eyeFrom = 0;
+    eyeTo = Tables.eyePlaylist[base]!.first;
+    eyeMorph = Spring(1);
+    expressionIntensity = clamp(custom?.intensity ?? 0.5, 0, 1);
+    t0 = now;
+    stateAt = now;
+    ctx = PoseCtx(now);
+    trickAt = now + rand(9000, 18000);
+    _started = true;
   }
 
   /// 统一控制通道：id 必须来自预设或已注册自定义；其余参数越界安全忽略。
@@ -336,10 +363,14 @@ class GrokCharacter {
   }
 
   void _morphEyes(int index, double stiffness) {
+    if (index == eyeTo && eyeMorph.t == 1) return;
     eyeFrom = eyeTo;
     eyeTo = index;
     eyeStiffness = stiffness;
-    eyeMorph = Spring(0);
+    // morph 从 0（旧眼型）走到目标 1（新眼型）；目标必须是 1，不能是 0。
+    eyeMorph = Spring(1)
+      ..x = 0
+      ..v = 0;
   }
 
   List<Pt> _currentPoly(int i) {
@@ -352,7 +383,10 @@ class GrokCharacter {
   /// 推进一帧。[now] 毫秒。
   CharacterView step(double now) {
     _now = now;
-    if (t0 == 0) start(now);
+    if (!_started) {
+      start(now);
+      _started = true;
+    }
 
     final mt = (now - t0) / 1000;
     final dtState = (now - stateAt) / 1000;
@@ -367,13 +401,19 @@ class GrokCharacter {
 
     // 推进切换过渡：目标从旧快照平滑移动到新 pose，眼睛 morph 同进度。
     final tr = _transition;
+    var morphLocked = false;
     if (tr != null) {
+      morphLocked = true;
       final realDt = (_last == 0 ? 1 / 120 : (now - _last) / 1000);
       tr.elapsed += realDt * 1000;
       _transitionMix = clamp(tr.elapsed / tr.durationMs, 0, 1);
       if (_transitionMix >= 1) _transition = null;
-      // 让眼睛 morph 直接跟随过渡进度（而非独立弹簧），保证同步。
-      eyeMorph.x = _transitionMix;
+      // 眼睛 morph 直接跟随过渡进度，并把目标(t)也同步设为 1，
+      // 这样过渡结束后弹簧不会把 x 从 ~1 拉回旧目标 0（那是抽搐/回滑的根因）。
+      eyeMorph
+        ..t = 1
+        ..x = _transitionMix
+        ..v = 0;
     }
 
     final newSpin = pose.spin * _deg2rad * motionMul;
@@ -510,10 +550,9 @@ class GrokCharacter {
     final stepDt = dt <= 0 ? 1 / 120 : dt;
     final n = springSteps(stepDt);
     final h = stepDt / n;
-    final inTransition = _transition != null || _transitionMix < 1;
     for (int i = 0; i < n; i++) {
       // 过渡期间 eyeMorph 直接跟随过渡进度，不做弹簧积分。
-      if (!inTransition) stepSpring(eyeMorph, eyeStiffness, 1, h);
+      if (!morphLocked) stepSpring(eyeMorph, eyeStiffness, 1, h);
       if (spinTurn != null) stepSpring(spinTurn!, 5, 0.9, h);
       stepSpring(spin, 5, 0.9, h);
       stepSpring(txSpring, 3.5, 1, h);

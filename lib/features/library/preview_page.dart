@@ -37,8 +37,11 @@ class _PreviewPageState extends State<PreviewPage> {
   Future<void> _setup() async {
     final raw = await rootBundle.loadString('assets/geo/grok_geo.json');
     final stage = StageController(GrokGeometry.fromJsonString(raw));
-    if (widget.custom != null) stage.character.registerCustom(widget.custom!);
-    stage.setExpression(widget.id);
+    if (widget.custom != null) {
+      stage.character.registerCustom(widget.custom!);
+    }
+    // 直接以目标表情作为初始状态，第一帧即该表情，不经过 idle 与过渡。
+    stage.character.initializeAs(widget.id, 0);
     if (mounted) {
       setState(() {
         _stage = stage;
