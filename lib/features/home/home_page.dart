@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../stage/grok_stage.dart';
 import '../settings/settings_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -49,7 +50,10 @@ class _HomePageState extends State<HomePage> {
                 MaterialPageRoute(builder: (_) => const SettingsPage()),
               ),
             ),
-            const _Stage(),
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: GrokStage(),
+            ),
             Expanded(child: _ChatArea(messages: _messages, scroll: _scroll)),
             _InputBar(
               controller: _input,
@@ -101,33 +105,6 @@ class _TopBar extends StatelessWidget {
             icon: Icon(ttsOn ? Icons.volume_up_outlined : Icons.volume_off_outlined),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _Stage extends StatelessWidget {
-  const _Stage();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 300,
-      child: Center(
-        child: Container(
-          width: 220,
-          height: 220,
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            Icons.sentiment_satisfied_outlined,
-            size: 88,
-            color: scheme.onSurfaceVariant.withValues(alpha: 0.35),
-          ),
-        ),
       ),
     );
   }

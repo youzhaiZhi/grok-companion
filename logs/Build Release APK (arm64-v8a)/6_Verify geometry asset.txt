@@ -1,0 +1,9 @@
+﻿2026-09-18T21:26:52.9078301Z ##[group]Run test -s assets/geo/grok_geo.json
+2026-09-18T21:26:52.9078776Z [36;1mtest -s assets/geo/grok_geo.json[0m
+2026-09-18T21:26:52.9124822Z shell: /usr/bin/bash -e {0}
+2026-09-18T21:26:52.9125137Z env:
+2026-09-18T21:26:52.9125525Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.20-1/x64
+2026-09-18T21:26:52.9126114Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.20-1/x64
+2026-09-18T21:26:52.9126666Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.3-x64/flutter
+2026-09-18T21:26:52.9127109Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-18T21:26:52.9127435Z ##[endgroup]

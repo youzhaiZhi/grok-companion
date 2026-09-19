@@ -1,0 +1,28 @@
+﻿2026-09-18T21:27:02.4882007Z ##[group]Run flutter test
+2026-09-18T21:27:02.4882577Z [36;1mflutter test[0m
+2026-09-18T21:27:02.4944995Z shell: /usr/bin/bash -e {0}
+2026-09-18T21:27:02.4945329Z env:
+2026-09-18T21:27:02.4945714Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.20-1/x64
+2026-09-18T21:27:02.4946343Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.20-1/x64
+2026-09-18T21:27:02.4946918Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.47.3-x64/flutter
+2026-09-18T21:27:02.4947375Z   PUB_CACHE: /home/runner/.pub-cache
+2026-09-18T21:27:02.4947676Z ##[endgroup]
+2026-09-18T21:27:02.6795584Z Resolving dependencies...
+2026-09-18T21:27:02.7809599Z Downloading packages...
+2026-09-18T21:27:02.8297724Z   code_assets 1.2.1 (2.1.0 available)
+2026-09-18T21:27:02.8298415Z   hooks 2.0.2 (2.2.0 available)
+2026-09-18T21:27:02.8298965Z   material_color_utilities 0.13.0 (0.13.1 available)
+2026-09-18T21:27:02.8299557Z   meta 1.18.3 (1.19.0 available)
+2026-09-18T21:27:02.8300042Z   objective_c 9.5.0 (9.6.0 available)
+2026-09-18T21:27:02.8300627Z   record_use 0.6.0 (1.1.1 available)
+2026-09-18T21:27:02.8301131Z   test_api 0.7.12 (0.7.14 available)
+2026-09-18T21:27:02.8301627Z   vector_math 2.4.0 (2.4.2 available)
+2026-09-18T21:27:02.8302128Z Got dependencies!
+2026-09-18T21:27:02.8302741Z 8 packages have newer versions incompatible with dependency constraints.
+2026-09-18T21:27:02.8303693Z Try `flutter pub outdated` for more information.
+2026-09-18T21:27:04.6584321Z 
+2026-09-18T21:27:14.0436760Z ##[group]✅ Passing tests
+2026-09-18T21:27:14.0437436Z ✅ 主页骨架渲染：设置入口、表情舞台、输入栏
+2026-09-18T21:27:14.0670534Z ##[endgroup]
+2026-09-18T21:27:14.0670864Z 
+2026-09-18T21:27:14.0676413Z 🎉 1 test passed.
