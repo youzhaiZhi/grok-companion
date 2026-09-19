@@ -19,23 +19,72 @@ class LocalTtsEngine implements TtsEngine {
   LocalTtsEngine([FlutterTts? tts]) : _tts = tts ?? FlutterTts();
 
   final FlutterTts _tts;
-  bool _ready = false;
+  bool _configured = false;
+  String? _resolvedLang;
+  String? _lastError;
 
-  Future<void> _configure(double rate) async {
-    if (_ready) return;
-    await _tts.setLanguage('zh-CN');
-    _ready = true;
+  String? get lastError => _lastError;
+
+  /// 按可用性挑选语言：优先大陆/台湾中文，再退任何中文，最后用系统默认。
+  Future<String?> _resolveLanguage() async {
+    const candidates = ['zh-CN', 'zh-TW', 'zh-HK', 'zh'];
+    for (final lang in candidates) {
+      try {
+        final ok = await _tts.isLanguageAvailable(lang);
+        if (ok == true || (ok is int && ok == 1)) return lang;
+      } catch (_) {}
+    }
+    try {
+      final langs = await _tts.getLanguages;
+      if (langs is List) {
+        for (final l in langs) {
+          if (l.toString().toLowerCase().startsWith('zh')) {
+            return l.toString();
+          }
+        }
+      }
+    } catch (_) {}
+    // 无中文引擎：返回 null，交给上层提示，而不是静默失败。
+    return null;
+  }
+
+  Future<void> _configure() async {
+    if (_configured) return;
+    await _tts.awaitSpeakCompletion(true);
+    _resolvedLang = await _resolveLanguage();
+    if (_resolvedLang != null) {
+      await _tts.setLanguage(_resolvedLang!);
+    }
+    _configured = true;
+  }
+
+  /// 用户语义语速（0.5–2）映射到 flutter_tts 的 0–1 值域。
+  double _mapRate(double semantic) {
+    final v = semantic.clamp(0.5, 2).toDouble();
+    final mapped = 0.25 + (v - 0.5) * 0.5;
+    return mapped.clamp(0.0, 1.0).toDouble();
   }
 
   @override
   Future<TtsResult> speak(String text, AppSettings settings) async {
+    _lastError = null;
     try {
       await _tts.stop();
-      await _configure(settings.ttsRate);
-      await _tts.setSpeechRate(settings.ttsRate.clamp(0.5, 2).toDouble());
-      await _tts.speak(text);
+      await _configure();
+      if (_resolvedLang == null) {
+        _lastError = '本机没有可用的中文语音引擎，请安装后重试或使用云端 TTS';
+        return TtsResult.failed;
+      }
+      await _tts.setSpeechRate(_mapRate(settings.ttsRate));
+      final r = await _tts.speak(text);
+      // Android 成功返回 1；iOS/macOS 返回 1；0 表示失败。
+      if (r == 0) {
+        _lastError = '语音引擎未能开始播放';
+        return TtsResult.failed;
+      }
       return TtsResult.spokenLocal;
-    } catch (_) {
+    } catch (e) {
+      _lastError = '本地 TTS 出错：$e';
       return TtsResult.failed;
     }
   }
@@ -101,19 +150,30 @@ class Speaker {
 
   final TtsEngine _local;
   final TtsEngine _cloud;
+  String? lastError;
 
   Future<TtsResult> speak(String text, AppSettings settings) async {
+    lastError = null;
     if (text.trim().isEmpty) return TtsResult.failed;
     switch (settings.ttsMode) {
       case 'cloud':
         final r = await _cloud.speak(text, settings);
         if (r == TtsResult.spokenCloud) return r;
         final fb = await _local.speak(text, settings);
-        return fb == TtsResult.spokenLocal
-            ? TtsResult.spokenLocal
-            : TtsResult.failed;
+        if (fb == TtsResult.spokenLocal) {
+          lastError = '云端 TTS 不可用，已用本地语音播放';
+          return TtsResult.spokenLocal;
+        }
+        lastError = _local is LocalTtsEngine
+            ? _local.lastError
+            : '云端与本地 TTS 均不可用';
+        return TtsResult.failed;
       case 'local':
-        return _local.speak(text, settings);
+        final r = await _local.speak(text, settings);
+        if (r != TtsResult.spokenLocal && _local is LocalTtsEngine) {
+          lastError = _local.lastError;
+        }
+        return r;
       default:
         return TtsResult.failed;
     }

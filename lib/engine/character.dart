@@ -12,6 +12,34 @@ import 'tricks.dart';
 
 const double _deg2rad = math.pi / 180;
 
+/// 切换表情时捕获的旧姿态六维快照。
+class _PoseSnapshot {
+  const _PoseSnapshot(
+    this.spin,
+    this.tx,
+    this.ty,
+    this.squash,
+    this.lid,
+    this.eyeBoost,
+  );
+
+  final double spin;
+  final double tx;
+  final double ty;
+  final double squash;
+  final double lid;
+  final double eyeBoost;
+}
+
+class _Transition {
+  _Transition(this.from, this.durationMs);
+
+  final _PoseSnapshot from;
+  final double durationMs;
+  double elapsed = 0;
+}
+
+
 /// 已注册的自定义表情：基于预设锚点 + 受控参数偏移（无坐标字段）。
 class RegisteredExpression {
   RegisteredExpression({
@@ -187,6 +215,10 @@ class GrokCharacter {
   late bool showDots;
   late double trickAt;
 
+  /// 表情切换过渡（姿态/眼睑平滑插值，眼睛 morph 同步）。
+  _Transition? _transition;
+  double _transitionMix = 1;
+
   double _now = 0;
   double _last = 0;
 
@@ -212,6 +244,16 @@ class GrokCharacter {
     final custom = registered[id];
     if (!isPreset && custom == null) return false;
 
+    // 捕获切换前的实际姿态（含弹簧当前值），作为过渡起点。
+    final snapshot = _PoseSnapshot(
+      spin.x,
+      txSpring.x,
+      tySpring.x,
+      squash.x,
+      blink.x,
+      eyeScale.x,
+    );
+
     if (isPreset) {
       state = id;
       currentOverride = null;
@@ -226,6 +268,11 @@ class GrokCharacter {
 
     final base = effectiveState;
     _morphEyes(Tables.eyePlaylist[base]!.first, 7);
+
+    // 启动过渡（减动态时缩短）；眼睛 morph 与过渡同进度。
+    final dur = reduceMotion ? 200.0 : 380.0;
+    _transition = _Transition(snapshot, dur)..elapsed = 0;
+    _transitionMix = 0;
     if (base == 'waking') {
       blinkQueue.add(BlinkItem(_now + 560, 0.05));
       blinkQueue.add(BlinkItem(_now + 1020, 0.05));
@@ -318,12 +365,39 @@ class GrokCharacter {
     final (motionMul, eyeBoostMul) = intensityMap(expressionIntensity);
     final holdScale = override == null ? 1.0 : override.holdMs / 2200;
 
-    spin.t = pose.spin * _deg2rad * motionMul;
-    txSpring.t = pose.tx * motionMul;
-    tySpring.t = pose.ty * motionMul;
-    squash.t = pose.squash;
-    eyeScale.t =
+    // 推进切换过渡：目标从旧快照平滑移动到新 pose，眼睛 morph 同进度。
+    final tr = _transition;
+    if (tr != null) {
+      final realDt = (_last == 0 ? 1 / 120 : (now - _last) / 1000);
+      tr.elapsed += realDt * 1000;
+      _transitionMix = clamp(tr.elapsed / tr.durationMs, 0, 1);
+      if (_transitionMix >= 1) _transition = null;
+      // 让眼睛 morph 直接跟随过渡进度（而非独立弹簧），保证同步。
+      eyeMorph.x = _transitionMix;
+    }
+
+    final newSpin = pose.spin * _deg2rad * motionMul;
+    final newTx = pose.tx * motionMul;
+    final newTy = pose.ty * motionMul;
+    final newSq = pose.squash;
+    final newEye =
         pose.eyeBoost * eyeBoostMul * (override?.eyeBoost ?? 1);
+
+    if (tr != null) {
+      final e = smoothStep(_transitionMix);
+      final f = tr.from;
+      spin.t = f.spin + (newSpin - f.spin) * e;
+      txSpring.t = f.tx + (newTx - f.tx) * e;
+      tySpring.t = f.ty + (newTy - f.ty) * e;
+      squash.t = f.squash + (newSq - f.squash) * e;
+      eyeScale.t = f.eyeBoost + (newEye - f.eyeBoost) * e;
+    } else {
+      spin.t = newSpin;
+      txSpring.t = newTx;
+      tySpring.t = newTy;
+      squash.t = newSq;
+      eyeScale.t = newEye;
+    }
 
     if (ctx.tyKick != 0) {
       tySpring.v += ctx.tyKick * motionMul;
@@ -359,6 +433,10 @@ class GrokCharacter {
     var lidTarget = key ?? pose.lid;
     if (override != null && override.lid != null) {
       lidTarget = clamp(lidTarget * override.lid!, 0, 1.2);
+    }
+    if (tr != null && key == null) {
+      final e = smoothStep(_transitionMix);
+      lidTarget = tr.from.lid + (lidTarget - tr.from.lid) * e;
     }
     blink.t = lidTarget;
 
@@ -432,8 +510,10 @@ class GrokCharacter {
     final stepDt = dt <= 0 ? 1 / 120 : dt;
     final n = springSteps(stepDt);
     final h = stepDt / n;
+    final inTransition = _transition != null || _transitionMix < 1;
     for (int i = 0; i < n; i++) {
-      stepSpring(eyeMorph, eyeStiffness, 1, h);
+      // 过渡期间 eyeMorph 直接跟随过渡进度，不做弹簧积分。
+      if (!inTransition) stepSpring(eyeMorph, eyeStiffness, 1, h);
       if (spinTurn != null) stepSpring(spinTurn!, 5, 0.9, h);
       stepSpring(spin, 5, 0.9, h);
       stepSpring(txSpring, 3.5, 1, h);

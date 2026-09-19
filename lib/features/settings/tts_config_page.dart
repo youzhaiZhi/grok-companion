@@ -25,6 +25,7 @@ class _TtsConfigPageState extends State<TtsConfigPage> {
   AppSettings _s = AppSettings();
   bool _loaded = false;
   bool _trying = false;
+  final Speaker _speaker = Speaker();
 
   @override
   void initState() {
@@ -42,14 +43,18 @@ class _TtsConfigPageState extends State<TtsConfigPage> {
 
   Future<void> _preview() async {
     setState(() => _trying = true);
-    final r = await Speaker().speak('你好，我是 Grok。', _s);
+    final r = await _speaker.speak('你好，我是 Grok。', _s);
     if (mounted) {
       final text = switch (r) {
         TtsResult.spokenCloud => '云端语音播放中',
-        TtsResult.spokenLocal => '本地语音播放中（云端不可用时的兜底）',
-        TtsResult.failed => '播放失败，请检查配置或网络',
+        TtsResult.spokenLocal =>
+          _speaker.lastError ?? '本地语音播放中',
+        TtsResult.failed =>
+          _speaker.lastError ?? '播放失败，请检查配置或网络',
       };
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(text)),
+      );
       setState(() => _trying = false);
     }
   }
