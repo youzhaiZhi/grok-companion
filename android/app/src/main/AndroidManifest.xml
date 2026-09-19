@@ -42,5 +42,10 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Android 11+ 包可见性限制：不声明该 action 时应用看不到系统 TTS 引擎，
+             flutter_tts 会拿不到任何语言/引擎，表现为本地 TTS 完全不可用。 -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
     </queries>
 </manifest>

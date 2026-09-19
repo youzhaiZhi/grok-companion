@@ -52,17 +52,17 @@ class LocalTtsEngine implements TtsEngine {
     if (_configured) return;
     await _tts.awaitSpeakCompletion(true);
     _resolvedLang = await _resolveLanguage();
-    if (_resolvedLang != null) {
-      await _tts.setLanguage(_resolvedLang!);
+    if (_resolvedLang == null) {
+      // 不缓存失败：引擎可能刚安装或尚未就绪，下次调用重新探测。
+      return;
+    }
+    final ok = await _tts.setLanguage(_resolvedLang!);
+    if (ok == 0) {
+      _lastError = '本机语音引擎不支持 $_resolvedLang，请在系统设置里安装中文语音数据';
+      _resolvedLang = null;
+      return;
     }
     _configured = true;
-  }
-
-  /// 用户语义语速（0.5–2）映射到 flutter_tts 的 0–1 值域。
-  double _mapRate(double semantic) {
-    final v = semantic.clamp(0.5, 2).toDouble();
-    final mapped = 0.25 + (v - 0.5) * 0.5;
-    return mapped.clamp(0.0, 1.0).toDouble();
   }
 
   @override
@@ -72,10 +72,11 @@ class LocalTtsEngine implements TtsEngine {
       await _tts.stop();
       await _configure();
       if (_resolvedLang == null) {
-        _lastError = '本机没有可用的中文语音引擎，请安装后重试或使用云端 TTS';
+        _lastError ??= '本机没有可用的中文语音引擎，请安装后重试或使用云端 TTS';
         return TtsResult.failed;
       }
-      await _tts.setSpeechRate(_mapRate(settings.ttsRate));
+      // Android 原生语速刻度：1.0 为正常，取值 0.5–2.0 直接对应「慢—正常—快」。
+      await _tts.setSpeechRate(settings.ttsRate.clamp(0.5, 2).toDouble());
       final r = await _tts.speak(text);
       // Android 成功返回 1；iOS/macOS 返回 1；0 表示失败。
       if (r == 0) {
